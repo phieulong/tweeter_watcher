@@ -33,7 +33,6 @@ class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
 
-
 def start_health_server():
     port = int(os.environ.get("PORT", "8080"))
     # Use ThreadingHTTPServer so each health check runs in its own thread
@@ -73,7 +72,7 @@ except Exception as e:
     logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319"]
+USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON = "twitter_cookies.json"
@@ -307,11 +306,11 @@ async def _main_loop():
             except Exception as e:
                 logging.exception("Error during run_once: %s", e)
 
-            logging.info("✔ done, chờ 60s")
+            logging.info("✔ done")
 
             # wait up to 60 seconds or until shutdown
             try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+                await asyncio.wait_for(shutdown_event.wait(), timeout=2)
             except asyncio.TimeoutError:
                 # timeout expired, run another iteration
                 continue
