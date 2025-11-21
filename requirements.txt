@@ -1,0 +1,5 @@
+requests>=2.32.4
+beautifulsoup4>=4.13.4
+python-telegram-bot>=20.4
+playwright
+aiohttp>=3.8.0

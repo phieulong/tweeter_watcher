@@ -1,0 +1,36 @@
+# fly.toml app configuration file generated for twitter-watcher on 2025-11-21T15:00:40+07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'twitter-watcher'
+primary_region = 'sin'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[processes]
+  app = 'python main.py'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8080
+  processes = ["app"]
+
+  [[services.ports]]
+    port = 80
+    handlers = ['http']
+
+  [[services.ports]]
+    port = 443
+    handlers = ['tls', 'http']
+
+  [[services.http_checks]]
+    interval = '10s'
+    timeout = '2s'
+    grace_period = '20s'
+    method = 'get'
+    path = '/healthz'
+
+[[vm]]
+  size = 'performance-1x'
