@@ -1,12 +1,21 @@
 import asyncio
 import json
 import os
-import typing
 from playwright.async_api import async_playwright
 import requests
 import http.server
 import threading
 import atexit
+import typing
+import sys
+import logging
+
+# Configure logging to stdout so Fly captures logs reliably
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
 
 
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
@@ -39,7 +48,7 @@ def start_health_server():
     # serve in a daemon thread
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    print(f"Health server running on 0.0.0.0:{port}/healthz")
+    logging.info(f"Health server running on 0.0.0.0:{port}/healthz")
 
     # ensure server is shut down cleanly on process exit
     def _cleanup():
@@ -61,7 +70,7 @@ _health_server = None
 try:
     _health_server = start_health_server()
 except Exception as e:
-    print("Warning: cannot start health server:", e)
+    logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
 USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319"]
@@ -176,7 +185,7 @@ def save_state(state):
 
 async def load_cookies(context):
     if not os.path.exists(COOKIES_JSON):
-        print("❌ Chưa login — hãy chạy login.py trước")
+        logging.error("❌ Chưa login — hãy chạy login.py trước")
         return False
 
     cookies = json.load(open(COOKIES_JSON))
@@ -185,7 +194,7 @@ async def load_cookies(context):
 
 
 async def get_latest_tweet(page, username):
-    print("Đang kiểm tra tweet người dùng:", username)
+    logging.info("Đang kiểm tra tweet người dùng: %s", username)
     url = f"https://x.com/{username}"
     await page.goto(url, timeout=60000)
     await page.wait_for_timeout(3000)
@@ -229,7 +238,7 @@ async def run_once():
             await page.goto("https://x.com/home")
 
             if "login" in page.url.lower():
-                print("❌ Cookie hết hạn — hãy chạy login.py để login lại")
+                logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
                 return
 
             for username in USERNAMES:
@@ -269,7 +278,7 @@ async def _main_loop():
     # register signal handlers that set the shutdown event
     def _make_handler(sig):
         def _handler():
-            print(f"Received signal {sig}, shutting down...")
+            logging.info("Received signal %s, shutting down...", sig)
             # schedule the event.set call on the loop thread safely
             loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
         return _handler
@@ -281,7 +290,7 @@ async def _main_loop():
     except NotImplementedError:
         # fallback for platforms that don't support add_signal_handler
         def _fallback(signum, frame):
-            print(f"Received signal {signum}, shutting down (fallback)...")
+            logging.info("Received signal %s, shutting down (fallback)...", signum)
             loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
 
         signal.signal(signal.SIGINT, _fallback)
@@ -296,9 +305,9 @@ async def _main_loop():
             try:
                 await run_once()
             except Exception as e:
-                print("Error during run_once:", e)
+                logging.exception("Error during run_once: %s", e)
 
-            print("✔ done, chờ 60s")
+            logging.info("✔ done, chờ 60s")
 
             # wait up to 60 seconds or until shutdown
             try:
@@ -308,7 +317,7 @@ async def _main_loop():
                 continue
     finally:
         # Clean up health server on shutdown
-        print("Cleaning up health server and exiting")
+        logging.info("Cleaning up health server and exiting")
         try:
             if _health_server:
                 _health_server.shutdown()
@@ -322,4 +331,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(_main_loop())
     except KeyboardInterrupt:
-        print("Interrupted by user")
+        logging.info("Interrupted by user")
+
