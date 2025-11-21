@@ -199,10 +199,12 @@ async def get_latest_tweet(page, username):
     await page.wait_for_timeout(3000)
 
     if await page.query_selector("div[data-testid='emptyState']"):
+        logging.info(f"Page {username} không có state... with {page}", )
         return None
 
     tweet = await page.query_selector("a[href*='/status/']")
     if not tweet:
+        logging.info(f"Page {username} không có status... with {page}", )
         return None
 
     link = await tweet.get_attribute("href")
