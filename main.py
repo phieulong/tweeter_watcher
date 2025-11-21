@@ -1,9 +1,9 @@
 import asyncio
 import json
 import os
+import typing
 from playwright.async_api import async_playwright
 import requests
-import time
 import http.server
 import threading
 import atexit
@@ -30,7 +30,8 @@ def start_health_server():
     # Use ThreadingHTTPServer so each health check runs in its own thread
     try:
         http.server.ThreadingHTTPServer.allow_reuse_address = True
-        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)
+        # type: ignore - handler type stub is incompatible with our BaseHTTPRequestHandler subclass
+        server = http.server.ThreadingHTTPServer(("0.0.0.0", port), _HealthHandler)  # type: ignore[arg-type]
     except OSError as e:
         print(f"Failed to start health server on port {port}: {e}")
         return None
@@ -205,54 +206,120 @@ async def get_latest_tweet(page, username):
     return tweet_id, text, "https://twitter.com" + link
 
 
-async def main():
+# Rename the original `main` that runs one iteration to `run_once`
+async def run_once():
     state = load_state()
 
     # --- CHECK BOT ADD GROUP ---
-    check_new_groups()
+    # keep this synchronous call off the event loop in the caller if desired
+    # check_new_groups()
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        context = await browser.new_context()
+        browser = None
+        try:
+            # pass recommended args for running Chromium in containerized environments
+            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context()
 
-        ok = await load_cookies(context)
-        if not ok:
-            return
+            ok = await load_cookies(context)
+            if not ok:
+                return
 
-        page = await context.new_page()
-        await page.goto("https://x.com/home")
+            page = await context.new_page()
+            await page.goto("https://x.com/home")
 
-        if "login" in page.url.lower():
-            print("❌ Cookie hết hạn — hãy chạy login.py để login lại")
-            return
+            if "login" in page.url.lower():
+                print("❌ Cookie hết hạn — hãy chạy login.py để login lại")
+                return
 
-        for username in USERNAMES:
+            for username in USERNAMES:
+                try:
+                    data = await get_latest_tweet(page, username)
+                    if not data:
+                        print("Không đọc được tweet:", username)
+                        continue
+
+                    tweet_id, text, link = data
+
+                    if state.get(username) != tweet_id:
+                        send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                        state[username] = tweet_id
+
+                except Exception as e:
+                    print("Lỗi:", e)
+
+            save_state(state)
+        finally:
+            # Ensure browser is always closed even if cancelled or an exception occurs
             try:
-                data = await get_latest_tweet(page, username)
-                if not data:
-                    print("Không đọc được tweet:", username)
-                    continue
+                if browser:
+                    await browser.close()
+            except Exception:
+                pass
 
-                tweet_id, text, link = data
 
-                if state.get(username) != tweet_id:
-                    send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                    state[username] = tweet_id
+# New top-level asyncio runner with graceful shutdown
+import signal
 
+async def _main_loop():
+    """Main async loop: registers signal handlers and runs periodic checks until SIGTERM/SIGINT."""
+    loop = asyncio.get_running_loop()
+    shutdown_event = asyncio.Event()
+
+    # register signal handlers that set the shutdown event
+    def _make_handler(sig):
+        def _handler():
+            print(f"Received signal {sig}, shutting down...")
+            # schedule the event.set call on the loop thread safely
+            loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
+        return _handler
+
+    try:
+        # add_signal_handler has a variadic args parameter in stubs; ignore type warnings here
+        loop.add_signal_handler(signal.SIGINT, _make_handler('SIGINT'))  # type: ignore[arg-type]
+        loop.add_signal_handler(signal.SIGTERM, _make_handler('SIGTERM'))  # type: ignore[arg-type]
+    except NotImplementedError:
+        # fallback for platforms that don't support add_signal_handler
+        def _fallback(signum, frame):
+            print(f"Received signal {signum}, shutting down (fallback)...")
+            loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
+
+        signal.signal(signal.SIGINT, _fallback)
+        signal.signal(signal.SIGTERM, _fallback)
+
+    # Run until shutdown_event is set
+    try:
+        while not shutdown_event.is_set():
+            # check new groups (blocking) off the loop to avoid blocking
+            await asyncio.to_thread(check_new_groups)
+
+            try:
+                await run_once()
             except Exception as e:
-                print("Lỗi:", e)
+                print("Error during run_once:", e)
 
-        save_state(state)
-        await browser.close()
+            print("✔ done, chờ 60s")
+
+            # wait up to 60 seconds or until shutdown
+            try:
+                await asyncio.wait_for(shutdown_event.wait(), timeout=60)
+            except asyncio.TimeoutError:
+                # timeout expired, run another iteration
+                continue
+    finally:
+        # Clean up health server on shutdown
+        print("Cleaning up health server and exiting")
+        try:
+            if _health_server:
+                _health_server.shutdown()
+                _health_server.server_close()
+        except Exception:
+            pass
 
 
-# =========================================
-# MAIN LOOP
-# =========================================
-
+# Replace the old blocking main loop with a proper asyncio.run invocation
 if __name__ == "__main__":
-    while True:
-        check_new_groups()   # kiểm tra bot được add
-        asyncio.run(main())  # chạy tweet watcher
-        print("✔ done, chờ 60s")
-        time.sleep(60)
+    try:
+        asyncio.run(_main_loop())
+    except KeyboardInterrupt:
+        print("Interrupted by user")
