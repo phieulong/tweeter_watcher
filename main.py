@@ -1,6 +1,9 @@
 import asyncio
+import hashlib
 import json
 import os
+from time import sleep
+
 from playwright.async_api import async_playwright
 import requests
 import http.server
@@ -107,7 +110,7 @@ def save_offset(offset):
 def check_new_groups():
     """Dùng getUpdates để xem bot được add vào group mới"""
     offset = load_offset()
-
+    logging.info("Kiểm tra bot được add vào group mới với offset %s", offset)
     res = requests.get(
         f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
         params={"offset": offset, "timeout": 0}
@@ -195,31 +198,32 @@ async def load_cookies(context):
 async def get_latest_tweet(page, username):
     logging.info("Đang kiểm tra tweet người dùng: %s", username)
     url = f"https://x.com/{username}"
-    await page.goto(url, timeout=60000)
+    await page.goto(url, timeout=10000)
     await page.wait_for_timeout(3000)
-
+    logging.info("Đã load xong page %s", url)
     if await page.query_selector("div[data-testid='emptyState']"):
         logging.info(f"Page {username} không có state... with {page}", )
         return None
-
-    tweet = await page.query_selector("a[href*='/status/']")
-    if not tweet:
-        logging.info(f"Page {username} không có status... with {page}", )
-        return None
-
-    link = await tweet.get_attribute("href")
-    tweet_id = link.split("/")[-1]
+    logging.info("Page %s có status... with %s", username, page)
+    # tweet = await page.query_selector_all("a[href*='/status/']")
+    # if not tweet:
+    #     logging.info(f"Page {username} không có status... with {page}", )
+    #     return None
+    # logging.info("Page %s có status... with %s", username, page)
+    # link = await tweet.get_attribute("href")
+    # tweet_id = link.split("/")[-1]
 
     text_el = await page.query_selector("div[data-testid='tweetText']")
     text = await text_el.inner_text() if text_el else ""
+    tweet_checksum = hashlib.sha256(text.encode()).hexdigest()
 
-    return tweet_id, text, "https://twitter.com" + link
+    return tweet_checksum, text, f"https://twitter.com/status/{username}"
 
 
 # Rename the original `main` that runs one iteration to `run_once`
 async def run_once():
     state = load_state()
-
+    logging.info("Bắt đầu kiểm tra tweet mới...")
     # --- CHECK BOT ADD GROUP ---
     # keep this synchronous call off the event loop in the caller if desired
     # check_new_groups()
@@ -228,7 +232,7 @@ async def run_once():
         browser = None
         try:
             # pass recommended args for running Chromium in containerized environments
-            browser = await pw.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            browser = await pw.chromium.launch()
             context = await browser.new_context()
 
             ok = await load_cookies(context)
@@ -236,7 +240,7 @@ async def run_once():
                 return
 
             page = await context.new_page()
-            await page.goto("https://x.com/home")
+            # await page.goto("https://x.com/home")
 
             if "login" in page.url.lower():
                 logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
@@ -252,6 +256,7 @@ async def run_once():
                     tweet_id, text, link = data
 
                     if state.get(username) != tweet_id:
+                        logging.info(f"User {tweet_id} vừa mới đăng tweet {text}")
                         send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
                         state[username] = tweet_id
 
@@ -260,9 +265,9 @@ async def run_once():
 
             save_state(state)
         finally:
-            # Ensure browser is always closed even if cancelled or an exception occurs
             try:
                 if browser:
+                    await page.close()
                     await browser.close()
             except Exception:
                 pass
@@ -272,36 +277,11 @@ async def run_once():
 import signal
 
 async def _main_loop():
-    """Main async loop: registers signal handlers and runs periodic checks until SIGTERM/SIGINT."""
-    loop = asyncio.get_running_loop()
-    shutdown_event = asyncio.Event()
-
-    # register signal handlers that set the shutdown event
-    def _make_handler(sig):
-        def _handler():
-            logging.info("Received signal %s, shutting down...", sig)
-            # schedule the event.set call on the loop thread safely
-            loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
-        return _handler
 
     try:
-        # add_signal_handler has a variadic args parameter in stubs; ignore type warnings here
-        loop.add_signal_handler(signal.SIGINT, _make_handler('SIGINT'))  # type: ignore[arg-type]
-        loop.add_signal_handler(signal.SIGTERM, _make_handler('SIGTERM'))  # type: ignore[arg-type]
-    except NotImplementedError:
-        # fallback for platforms that don't support add_signal_handler
-        def _fallback(signum, frame):
-            logging.info("Received signal %s, shutting down (fallback)...", signum)
-            loop.call_soon_threadsafe(lambda: shutdown_event.set())  # type: ignore[arg-type]
-
-        signal.signal(signal.SIGINT, _fallback)
-        signal.signal(signal.SIGTERM, _fallback)
-
-    # Run until shutdown_event is set
-    try:
-        while not shutdown_event.is_set():
+        while True:
             # check new groups (blocking) off the loop to avoid blocking
-            await asyncio.to_thread(check_new_groups)
+            # await asyncio.to_thread(check_new_groups)
 
             try:
                 await run_once()
@@ -309,13 +289,9 @@ async def _main_loop():
                 logging.exception("Error during run_once: %s", e)
 
             logging.info("✔ done")
+            sleep(60)
 
             # wait up to 60 seconds or until shutdown
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=2)
-            except asyncio.TimeoutError:
-                # timeout expired, run another iteration
-                continue
     finally:
         # Clean up health server on shutdown
         logging.info("Cleaning up health server and exiting")
