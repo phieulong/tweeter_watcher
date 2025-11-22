@@ -224,9 +224,6 @@ async def get_latest_tweet(page, username):
 async def run_once():
     state = load_state()
     logging.info("Bắt đầu kiểm tra tweet mới...")
-    # --- CHECK BOT ADD GROUP ---
-    # keep this synchronous call off the event loop in the caller if desired
-    # check_new_groups()
 
     async with async_playwright() as pw:
         browser = None
@@ -240,7 +237,6 @@ async def run_once():
                 return
 
             page = await context.new_page()
-            # await page.goto("https://x.com/home")
 
             if "login" in page.url.lower():
                 logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
@@ -280,9 +276,6 @@ async def _main_loop():
 
     try:
         while True:
-            # check new groups (blocking) off the loop to avoid blocking
-            # await asyncio.to_thread(check_new_groups)
-
             try:
                 await run_once()
             except Exception as e:
