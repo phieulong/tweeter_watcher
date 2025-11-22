@@ -204,7 +204,6 @@ async def get_latest_tweet(page, username):
     if await page.query_selector("div[data-testid='emptyState']"):
         logging.info(f"Page {username} không có state... with {page}", )
         return None
-    logging.info("Page %s có status... with %s", username, page)
     # tweet = await page.query_selector_all("a[href*='/status/']")
     # if not tweet:
     #     logging.info(f"Page {username} không có status... with {page}", )
@@ -217,7 +216,7 @@ async def get_latest_tweet(page, username):
     text = await text_el.inner_text() if text_el else ""
     tweet_checksum = hashlib.sha256(text.encode()).hexdigest()
 
-    return tweet_checksum, text, f"https://twitter.com/status/{username}"
+    return tweet_checksum, text, f"https://twitter.com/{username}"
 
 
 # Rename the original `main` that runs one iteration to `run_once`
@@ -249,12 +248,12 @@ async def run_once():
                         print("Không đọc được tweet:", username)
                         continue
 
-                    tweet_id, text, link = data
+                    checksum, text, link = data
 
-                    if state.get(username) != tweet_id:
-                        logging.info(f"User {tweet_id} vừa mới đăng tweet {text}")
-                        send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                        state[username] = tweet_id
+                    if state.get(username) != checksum:
+                        logging.info(f"User {username} vừa mới đăng tweet {text}")
+                        # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                        state[username] = checksum
 
                 except Exception as e:
                     print("Lỗi:", e)
