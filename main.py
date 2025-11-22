@@ -1,15 +1,11 @@
 import asyncio
-import hashlib
 import json
 import os
-from time import sleep
-
 from playwright.async_api import async_playwright
 import requests
 import http.server
 import threading
 import atexit
-import typing
 import sys
 import logging
 
@@ -76,8 +72,8 @@ except Exception as e:
     logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-USERNAMES = ["elonmusk", "nhat1122319"]
-USERNAMES_1 = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+# USERNAMES = ["elonmusk", "nhat1122319"]
+USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON = "twitter_cookies.json"
@@ -158,19 +154,49 @@ def check_new_groups():
 # TELEGRAM SEND
 # =========================================
 
-def send_telegram(msg):
-    groups = load_groups()
-    if not groups:
-        print("⚠️ Chưa có group nào, bot chưa được add")
-        return
-
-    for gid in groups:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={
+async def send_telegram_to_group(gid, msg):
+    """Send telegram message to a single group"""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    try:
+        response = requests.post(url, json={
             "chat_id": gid,
             "text": msg,
             "disable_web_page_preview": True
-        })
+        }, timeout=10)
+        if response.status_code == 200:
+            logging.debug(f"Successfully sent message to group {gid}")
+        else:
+            logging.warning(f"Failed to send message to group {gid}: {response.status_code}")
+    except Exception as e:
+        logging.error(f"Error sending message to group {gid}: {e}")
+
+def send_telegram(msg):
+    """Send telegram message to all groups in parallel (fire and forget)"""
+    groups = load_groups()
+    if not groups:
+        logging.warning("⚠️ Chưa có group nào, bot chưa được add")
+        return
+
+    # Create background tasks for all groups - don't await them
+    async def _send_to_all_groups():
+        tasks = []
+        for gid in groups:
+            task = asyncio.create_task(send_telegram_to_group(gid, msg))
+            tasks.append(task)
+
+        # Wait for all sends to complete
+        await asyncio.gather(*tasks, return_exceptions=True)
+        logging.debug(f"Completed sending message to {len(groups)} groups")
+
+    # Start the background task without waiting for it
+    try:
+        # Get the current event loop
+        loop = asyncio.get_event_loop()
+        # Schedule the coroutine to run in the background
+        loop.create_task(_send_to_all_groups())
+    except RuntimeError:
+        # If no event loop is running, log the error
+        logging.error("No event loop running - cannot send telegram messages")
 
 
 # =========================================
@@ -201,7 +227,7 @@ async def get_latest_tweet(page, username):
     logging.info("Đang kiểm tra tweet người dùng: %s", username)
     url = f"https://x.com/{username}"
     await page.goto(url, timeout=60000)
-    await page.wait_for_timeout(30000)
+    await page.wait_for_timeout(60000)
     logging.info("Đã load xong page %s", url)
     if await page.query_selector("div[data-testid='emptyState']"):
         logging.info(f"Page {username} không có state... with {page}", )
@@ -209,8 +235,6 @@ async def get_latest_tweet(page, username):
     tweet = await page.query_selector("a[href*='/status/']")
     if not tweet:
         logging.info(f"Page {username} không có status... with {page}", )
-        # return None
-    # logging.info("Page %s có status... with %s", username, page)
     link = await tweet.get_attribute("href")
     tweet_id = link.split("/")[-1]
     print(f'Found tweet ID: {tweet_id} for user {username}')
@@ -223,51 +247,17 @@ async def get_latest_tweet(page, username):
 
 
 # Rename the original `main` that runs one iteration to `run_once`
-async def run_once(username):
+async def run_once(page, username):
     """Check tweets for a single username and return the result"""
     logging.info("Bắt đầu kiểm tra tweet mới cho %s...", username)
+    data = await get_latest_tweet(page, username)
+    if not data:
+        logging.info("Không đọc được tweet: %s", username)
+        return username, None
 
-    async with async_playwright() as pw:
-        browser = None
-        try:
-            # pass recommended args for running Chromium in containerized environments
-            browser = await pw.chromium.launch()
-            context = await browser.new_context()
+    checksum, text, link = data
+    return username, (checksum, text, link)
 
-            ok = await load_cookies(context)
-            if not ok:
-                return username, None
-
-            page = await context.new_page()
-
-            if "login" in page.url.lower():
-                logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
-                return username, None
-
-            try:
-                data = await get_latest_tweet(await context.new_page(), username)
-                if not data:
-                    logging.info("Không đọc được tweet: %s", username)
-                    return username, None
-
-                checksum, text, link = data
-                return username, (checksum, text, link)
-
-            except Exception as e:
-                logging.exception("Lỗi khi lấy tweet cho %s: %s", username, e)
-                return username, None
-
-        finally:
-            try:
-                if browser:
-                    await page.close()
-                    await browser.close()
-            except Exception:
-                pass
-
-
-# New top-level asyncio runner with graceful shutdown
-import signal
 
 async def _main_loop():
     global FIRST_TIME
@@ -279,39 +269,59 @@ async def _main_loop():
 
                 # Create tasks for all usernames to run in parallel
                 tasks = []
-                for username in USERNAMES:
-                    task = asyncio.create_task(run_once(username))
-                    tasks.append(task)
+                async with async_playwright() as pw:
+                    browser = None
+                    try:
+                        browser = await pw.chromium.launch()
+                        context = await browser.new_context()
 
-                # Wait for all tasks to complete
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                        ok = await load_cookies(context)
+                        if not ok:
+                            return username, None
 
-                # Process results and update state
-                state_updated = False
-                for result in results:
-                    if isinstance(result, Exception):
-                        logging.exception("Task failed with exception: %s", result)
-                        continue
+                        for username in USERNAMES:
+                            page = await context.new_page()
+                            task = asyncio.create_task(run_once(page, username))
+                            tasks.append(task)
 
-                    username, data = result
-                    if data is None:
-                        continue
+                        # Wait for all tasks to complete
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                    checksum, text, link = data
+                        # Process results and update state
+                        state_updated = False
+                        for result in results:
+                            if isinstance(result, Exception):
+                                logging.exception("Task failed with exception: %s", result)
+                                continue
 
-                    if state.get(username) != checksum:
-                        if not FIRST_TIME:
-                            logging.info("User %s vừa mới đăng tweet: %s", username, text[:100] + "..." if len(text) > 100 else text)
-                            send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                        state[username] = checksum
-                        state_updated = True
+                            username, data = result
+                            if data is None:
+                                continue
 
-                # Save state only if there were updates
-                if state_updated:
-                    save_state(state)
-                FIRST_TIME = False
-            except Exception as e:
-                logging.exception("Error during parallel run_once: %s", e)
+                            checksum, text, link = data
+
+                            if state.get(username) != checksum:
+                                if not FIRST_TIME:
+                                    logging.info("User %s vừa mới đăng tweet: %s", username, text[:100] + "..." if len(text) > 100 else text)
+                                    send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                                state[username] = checksum
+                                state_updated = True
+
+                        # Save state only if there were updates
+                        if state_updated:
+                            save_state(state)
+                        FIRST_TIME = False
+
+                    finally:
+                        try:
+                            if browser:
+                                await page.close()
+                                await browser.close()
+                        except Exception as _e:
+                            logging.exception("Page failed with exception: %s", _e)
+                            pass
+            except Exception as main_e:
+                logging.exception("Error during parallel run_once: %s", main_e)
 
             logging.info("✔ done, waiting 3s before next check")
 
