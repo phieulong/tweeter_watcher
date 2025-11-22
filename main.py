@@ -20,6 +20,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
+FIRST_TIME = True
 
 class _HealthHandler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -75,7 +76,7 @@ except Exception as e:
     logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-USERNAMES = ["elonmusk"]
+USERNAMES = ["elonmusk", "nhat1122319"]
 USERNAMES_1 = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
@@ -200,32 +201,31 @@ async def get_latest_tweet(page, username):
     logging.info("Đang kiểm tra tweet người dùng: %s", username)
     url = f"https://x.com/{username}"
     await page.goto(url, timeout=60000)
-    await page.wait_for_timeout(60000)
+    await page.wait_for_timeout(30000)
     logging.info("Đã load xong page %s", url)
     if await page.query_selector("div[data-testid='emptyState']"):
         logging.info(f"Page {username} không có state... with {page}", )
         return None
-    # tweet = await page.query_selector_all("a[href*='/status/']")
-    # if not tweet:
-    #     logging.info(f"Page {username} không có status... with {page}", )
-    #     return None
+    tweet = await page.query_selector("a[href*='/status/']")
+    if not tweet:
+        logging.info(f"Page {username} không có status... with {page}", )
+        # return None
     # logging.info("Page %s có status... with %s", username, page)
-    # link = await tweet.get_attribute("href")
-    # tweet_id = link.split("/")[-1]
+    link = await tweet.get_attribute("href")
+    tweet_id = link.split("/")[-1]
+    print(f'Found tweet ID: {tweet_id} for user {username}')
 
     text_el = await page.query_selector("div[data-testid='tweetText']")
     text = await text_el.inner_text() if text_el else ""
     if text == "":
-       return None
-    tweet_checksum = hashlib.sha256(text.encode()).hexdigest()
-
-    return tweet_checksum, text, f"https://twitter.com/{username}"
+        return None
+    return tweet_id, text, f"https://x.com/{username}/status/{tweet_id}"
 
 
 # Rename the original `main` that runs one iteration to `run_once`
 async def run_once(username):
-    state = load_state()
-    logging.info("Bắt đầu kiểm tra tweet mới...")
+    """Check tweets for a single username and return the result"""
+    logging.info("Bắt đầu kiểm tra tweet mới cho %s...", username)
 
     async with async_playwright() as pw:
         browser = None
@@ -236,46 +236,27 @@ async def run_once(username):
 
             ok = await load_cookies(context)
             if not ok:
-                return
+                return username, None
 
             page = await context.new_page()
 
             if "login" in page.url.lower():
                 logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
-                return
+                return username, None
+
             try:
                 data = await get_latest_tweet(await context.new_page(), username)
                 if not data:
-                    print("Không đọc được tweet:", username)
+                    logging.info("Không đọc được tweet: %s", username)
+                    return username, None
 
                 checksum, text, link = data
-
-                if state.get(username) != checksum:
-                    logging.info(f"User {username} vừa mới đăng tweet {text}")
-                    # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                    state[username] = checksum
+                return username, (checksum, text, link)
 
             except Exception as e:
-                print("Lỗi:", e)
+                logging.exception("Lỗi khi lấy tweet cho %s: %s", username, e)
+                return username, None
 
-            # for username in USERNAMES:
-            #     try:
-            #         data = await get_latest_tweet(await context.new_page(), username)
-            #         if not data:
-            #             print("Không đọc được tweet:", username)
-            #             continue
-            #
-            #         checksum, text, link = data
-            #
-            #         if state.get(username) != checksum:
-            #             logging.info(f"User {username} vừa mới đăng tweet {text}")
-            #             # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-            #             state[username] = checksum
-            #
-            #     except Exception as e:
-            #         print("Lỗi:", e)
-
-            save_state(state)
         finally:
             try:
                 if browser:
@@ -289,9 +270,13 @@ async def run_once(username):
 import signal
 
 async def _main_loop():
+    global FIRST_TIME
     try:
         while True:
             try:
+                # Load state once per iteration
+                state = load_state()
+
                 # Create tasks for all usernames to run in parallel
                 tasks = []
                 for username in USERNAMES:
@@ -299,15 +284,39 @@ async def _main_loop():
                     tasks.append(task)
 
                 # Wait for all tasks to complete
-                await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
+                # Process results and update state
+                state_updated = False
+                for result in results:
+                    if isinstance(result, Exception):
+                        logging.exception("Task failed with exception: %s", result)
+                        continue
+
+                    username, data = result
+                    if data is None:
+                        continue
+
+                    checksum, text, link = data
+
+                    if state.get(username) != checksum:
+                        if not FIRST_TIME:
+                            logging.info("User %s vừa mới đăng tweet: %s", username, text[:100] + "..." if len(text) > 100 else text)
+                            send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                        state[username] = checksum
+                        state_updated = True
+
+                # Save state only if there were updates
+                if state_updated:
+                    save_state(state)
+                FIRST_TIME = False
             except Exception as e:
                 logging.exception("Error during parallel run_once: %s", e)
 
-            logging.info("✔ done, waiting 60s before next check")
+            logging.info("✔ done, waiting 3s before next check")
 
             # Wait 60 seconds before next iteration
-            await asyncio.sleep(60)
+            await asyncio.sleep(3)
 
     finally:
         # Clean up health server on shutdown
