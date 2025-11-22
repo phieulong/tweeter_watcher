@@ -289,17 +289,26 @@ async def run_once(username):
 import signal
 
 async def _main_loop():
-
     try:
         while True:
             try:
-                await run_once("elonmusk")
+                # Create tasks for all usernames to run in parallel
+                tasks = []
+                for username in USERNAMES:
+                    task = asyncio.create_task(run_once(username))
+                    tasks.append(task)
+
+                # Wait for all tasks to complete
+                await asyncio.gather(*tasks, return_exceptions=True)
+
             except Exception as e:
-                logging.exception("Error during run_once: %s", e)
+                logging.exception("Error during parallel run_once: %s", e)
 
-            logging.info("✔ done")
+            logging.info("✔ done, waiting 60s before next check")
 
-            # wait up to 60 seconds or until shutdown
+            # Wait 60 seconds before next iteration
+            await asyncio.sleep(60)
+
     finally:
         # Clean up health server on shutdown
         logging.info("Cleaning up health server and exiting")
@@ -317,4 +326,3 @@ if __name__ == "__main__":
         asyncio.run(_main_loop())
     except KeyboardInterrupt:
         logging.info("Interrupted by user")
-
