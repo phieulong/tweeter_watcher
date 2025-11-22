@@ -75,7 +75,8 @@ except Exception as e:
     logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+USERNAMES = ["elonmusk"]
+USERNAMES_1 = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON = "twitter_cookies.json"
@@ -198,8 +199,8 @@ async def load_cookies(context):
 async def get_latest_tweet(page, username):
     logging.info("Đang kiểm tra tweet người dùng: %s", username)
     url = f"https://x.com/{username}"
-    await page.goto(url, timeout=10000)
-    await page.wait_for_timeout(3000)
+    await page.goto(url, timeout=60000)
+    await page.wait_for_timeout(60000)
     logging.info("Đã load xong page %s", url)
     if await page.query_selector("div[data-testid='emptyState']"):
         logging.info(f"Page {username} không có state... with {page}", )
@@ -214,13 +215,15 @@ async def get_latest_tweet(page, username):
 
     text_el = await page.query_selector("div[data-testid='tweetText']")
     text = await text_el.inner_text() if text_el else ""
+    if text == "":
+       return None
     tweet_checksum = hashlib.sha256(text.encode()).hexdigest()
 
     return tweet_checksum, text, f"https://twitter.com/{username}"
 
 
 # Rename the original `main` that runs one iteration to `run_once`
-async def run_once():
+async def run_once(username):
     state = load_state()
     logging.info("Bắt đầu kiểm tra tweet mới...")
 
@@ -240,23 +243,37 @@ async def run_once():
             if "login" in page.url.lower():
                 logging.error("❌ Cookie hết hạn — hãy chạy login.py để login lại")
                 return
+            try:
+                data = await get_latest_tweet(await context.new_page(), username)
+                if not data:
+                    print("Không đọc được tweet:", username)
 
-            for username in USERNAMES:
-                try:
-                    data = await get_latest_tweet(page, username)
-                    if not data:
-                        print("Không đọc được tweet:", username)
-                        continue
+                checksum, text, link = data
 
-                    checksum, text, link = data
+                if state.get(username) != checksum:
+                    logging.info(f"User {username} vừa mới đăng tweet {text}")
+                    # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                    state[username] = checksum
 
-                    if state.get(username) != checksum:
-                        logging.info(f"User {username} vừa mới đăng tweet {text}")
-                        # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                        state[username] = checksum
+            except Exception as e:
+                print("Lỗi:", e)
 
-                except Exception as e:
-                    print("Lỗi:", e)
+            # for username in USERNAMES:
+            #     try:
+            #         data = await get_latest_tweet(await context.new_page(), username)
+            #         if not data:
+            #             print("Không đọc được tweet:", username)
+            #             continue
+            #
+            #         checksum, text, link = data
+            #
+            #         if state.get(username) != checksum:
+            #             logging.info(f"User {username} vừa mới đăng tweet {text}")
+            #             # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+            #             state[username] = checksum
+            #
+            #     except Exception as e:
+            #         print("Lỗi:", e)
 
             save_state(state)
         finally:
@@ -276,12 +293,11 @@ async def _main_loop():
     try:
         while True:
             try:
-                await run_once()
+                await run_once("elonmusk")
             except Exception as e:
                 logging.exception("Error during run_once: %s", e)
 
             logging.info("✔ done")
-            sleep(60)
 
             # wait up to 60 seconds or until shutdown
     finally:
