@@ -298,20 +298,32 @@ class TwitterScraper:
                 logging.info(f"Page {username} has no tweets")
                 return None
 
-            # Find the first tweet link
-            tweet_link = await page.query_selector("a[href*='/status/']")
-            if not tweet_link:
+            # Find all tweet links (filter out analytics, photo, video links)
+            all_links = await page.query_selector_all("a[href*='/status/']")
+            tweet_links = []
+
+            for link in all_links:
+                href = await link.get_attribute("href")
+                # Filter out analytics, photo, video, and other non-tweet links
+                if href and not any(keyword in href for keyword in ['/analytics', '/photo/', '/video/', '/retweets', '/quotes', '/likes']):
+                    # Ensure it's a direct tweet link (ends with status/ID or status/ID/)
+                    parts = href.split('/')
+                    if 'status' in parts:
+                        status_index = parts.index('status')
+                        if status_index + 1 < len(parts) and parts[status_index + 1].isdigit():
+                            tweet_links.append(link)
+
+            if not tweet_links:
                 logging.info(f"No tweets found for {username}")
                 return None
 
-            link = await tweet_link.get_attribute("href")
-            tweet_id = link.split("/")[-1]
+            # Check the first tweet to see if it's pinned
+            first_tweet_link = tweet_links[0]
+            first_link = await first_tweet_link.get_attribute("href")
+            first_tweet_id = first_link.split("/")[-1].split('?')[0]  # Remove query params if any
 
-            # Check if the tweet is pinned
-            # Look for pinned tweet indicator on the whole page
+            # Check if the first tweet is pinned
             is_pinned = False
-
-            # Check for various pinned tweet indicators
             pin_indicators = [
                 "div[data-testid='socialContext']",  # General social context container
                 "svg[aria-label*='Pin']",  # Pin icon
@@ -332,17 +344,53 @@ class TwitterScraper:
                 except Exception:
                     continue
 
-            # Get tweet text
-            text_element = await page.query_selector("div[data-testid='tweetText']")
+            # Determine which tweet to use
+            if is_pinned and len(tweet_links) > 1:
+                # First tweet is pinned, use the second tweet (latest actual tweet)
+                tweet_link = tweet_links[1]
+                link = await tweet_link.get_attribute("href")
+                tweet_id = link.split("/")[-1].split('?')[0]  # Remove query params if any
+
+                # Log information about both tweets
+                logging.info(f"First tweet {first_tweet_id} for @{username}: 📌 PINNED")
+                logging.info(f"Using next tweet {tweet_id} for @{username}: 🔹 LATEST ACTUAL TWEET")
+            else:
+                # Use the first tweet (either not pinned or only one tweet available)
+                tweet_link = first_tweet_link
+                link = first_link
+                tweet_id = first_tweet_id
+
+                pin_status = "📌 PINNED" if is_pinned else "🔹 NOT PINNED"
+                logging.info(f"Tweet {tweet_id} for @{username}: {pin_status}")
+
+            # Get tweet text from the selected tweet
+            # Navigate to the tweet's container to find the text
+            text_element = None
+            try:
+                # Try to find the text element near the selected tweet link
+                tweet_articles = await page.query_selector_all("article[data-testid='tweet']")
+                for article in tweet_articles:
+                    article_link = await article.query_selector("a[href*='/status/']")
+                    if article_link:
+                        article_href = await article_link.get_attribute("href")
+                        if tweet_id in article_href:
+                            text_element = await article.query_selector("div[data-testid='tweetText']")
+                            break
+
+                # Fallback: try to find any tweet text element
+                if not text_element:
+                    text_element = await page.query_selector("div[data-testid='tweetText']")
+
+            except Exception as e:
+                logging.warning(f"Error finding tweet text for {tweet_id}: {e}")
+                text_element = await page.query_selector("div[data-testid='tweetText']")
+
             text = await text_element.inner_text() if text_element else ""
 
             if not text:
                 logging.info(f"No text found for tweet {tweet_id}")
                 return None
 
-            # Log pin status
-            pin_status = "📌 PINNED" if is_pinned else "🔹 NOT PINNED"
-            logging.info(f"Tweet {tweet_id} for @{username}: {pin_status}")
 
             full_link = f"https://x.com/{username}/status/{tweet_id}"
             return tweet_id, text, full_link
