@@ -72,12 +72,12 @@ except Exception as e:
     logging.warning("Warning: cannot start health server: %s", e)
 
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-# USERNAMES = ["elonmusk", "nhat1122319"]
-USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+USERNAMES = ["elonmusk", "nhat1122319"]
+# USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
-COOKIES_JSON_1 = "/cookies/twitter_cookies_1.json"
-COOKIES_JSON_2 = "/cookies/twitter_cookies_2.json"
+COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
+COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
 GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
 
@@ -215,6 +215,7 @@ def save_state(state):
 
 
 async def load_cookies(context, cookies_address):
+    print(f"Loading cookies from {cookies_address}")
     if not os.path.exists(cookies_address):
         logging.error("❌ Chưa login — hãy chạy login.py trước")
         return False
@@ -261,23 +262,38 @@ async def run_once(page, username):
 
 async def _main_loop():
     global FIRST_TIME
+    iteration_count = 0
+
     try:
         while True:
             try:
                 # Load state once per iteration
                 state = load_state()
 
+                # Determine which cookies file to use based on iteration count
+                # Use cookies_1 for iterations 0-1, 4-5, 8-9, etc.
+                # Use cookies_2 for iterations 2-3, 6-7, 10-11, etc.
+                if (iteration_count // 2) % 2 == 0:
+                    cookies_file = COOKIES_JSON_1
+                    logging.info("Using cookies file 1 (iteration %d)", iteration_count)
+                else:
+                    cookies_file = COOKIES_JSON_2
+                    logging.info("Using cookies file 2 (iteration %d)", iteration_count)
+
                 # Create tasks for all usernames to run in parallel
                 tasks = []
                 async with async_playwright() as pw:
                     browser = None
                     try:
-                        browser = await pw.firefox.launch()
+                        browser = await pw.chromium.launch()
                         context = await browser.new_context()
 
-                        ok = await load_cookies(context)
+                        ok = await load_cookies(context, cookies_file)
                         if not ok:
-                            return username, None
+                            logging.error("Failed to load cookies from %s", cookies_file)
+                            iteration_count += 1
+                            await asyncio.sleep(3)
+                            continue
 
                         for username in USERNAMES:
                             page = await context.new_page()
@@ -320,12 +336,16 @@ async def _main_loop():
                         except Exception as _e:
                             logging.exception("Page failed with exception: %s", _e)
                             pass
+
+                # Increment iteration counter after successful iteration
+                iteration_count += 1
+
             except Exception as main_e:
                 logging.exception("Error during parallel run_once: %s", main_e)
 
             logging.info("✔ done, waiting 3s before next check")
 
-            # Wait 60 seconds before next iteration
+            # Wait 3 seconds before next iteration
             await asyncio.sleep(3)
 
     finally:
