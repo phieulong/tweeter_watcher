@@ -20,8 +20,8 @@ logging.basicConfig(
 
 # Constants
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
-USERNAMES = ["elonmusk", "nhat1122319"]
-# USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+# USERNAMES = ["elonmusk", "nhat1122319"]
+USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
 COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
