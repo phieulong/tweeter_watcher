@@ -21,9 +21,11 @@ logging.basicConfig(
 # Constants
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
 USERNAMES = ["elonmusk", "nhat1122319"]
+# USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
-COOKIES_JSON_2 = "cookies/twitter_cookies_3.json"
+COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
+COOKIES_JSON_3 = "cookies/twitter_cookies_3.json"
 GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
 SLEEP_INTERVAL = 30
@@ -547,14 +549,22 @@ class TwitterWatcher:
 
     def _get_cookies_file(self) -> str:
         """Determine which cookies file to use based on iteration count"""
-        # Use cookies_1 for iterations 0-1, 4-5, 8-9, etc.
-        # Use cookies_2 for iterations 2-3, 6-7, 10-11, etc.
-        if (self.iteration_count // 2) % 2 == 0:
+        # Rotate between 3 files every 2 iterations:
+        # cookies_1: iterations 0-1, 6-7, 12-13, etc.
+        # cookies_2: iterations 2-3, 8-9, 14-15, etc.
+        # cookies_3: iterations 4-5, 10-11, 16-17, etc.
+        cycle_position = (self.iteration_count // 2) % 3
+
+        if cycle_position == 0:
             cookies_file = COOKIES_JSON_1
             logging.info("Using cookies file 1 (iteration %d)", self.iteration_count)
-        else:
+        elif cycle_position == 1:
             cookies_file = COOKIES_JSON_2
             logging.info("Using cookies file 2 (iteration %d)", self.iteration_count)
+        else:
+            cookies_file = COOKIES_JSON_3
+            logging.info("Using cookies file 3 (iteration %d)", self.iteration_count)
+
         return cookies_file
 
     async def _process_user_batch(self, context: BrowserContext, usernames: List[str]) -> List[Tuple[str, Optional[Dict[str, Any]]]]:
