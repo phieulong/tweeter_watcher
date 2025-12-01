@@ -196,8 +196,14 @@ class TelegramNotifier:
         self.bot_token = bot_token
         self.group_manager = GroupManager()
 
-    async def send_to_group(self, group_id: int, message: str) -> bool:
-        """Send message to a single Telegram group"""
+    async def send_to_group(self, group_id: int, message: str) -> int:
+        """Send message to a single Telegram group
+
+        Returns:
+            200: Success
+            403: Forbidden (bot removed from group)
+            -1: Other error
+        """
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
 
         try:
@@ -213,17 +219,20 @@ class TelegramNotifier:
 
             if response.status_code == 200:
                 logging.debug(f"Successfully sent message to group {group_id}")
-                return True
+                return 200
+            elif response.status_code == 403:
+                logging.warning(f"Bot removed from group {group_id} (403 Forbidden)")
+                return 403
             else:
                 logging.warning(f"Failed to send message to group {group_id}: {response.status_code}")
-                return False
+                return response.status_code
 
         except Exception as e:
             logging.error(f"Error sending message to group {group_id}: {e}")
-            return False
+            return -1
 
     def send_to_all_groups(self, message: str) -> None:
-        """Send message to all groups (fire and forget)"""
+        """Send message to all groups and remove 403 failed groups"""
         groups = self.group_manager.load_groups()
 
         if not groups:
@@ -237,7 +246,29 @@ class TelegramNotifier:
             ]
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            success_count = sum(1 for result in results if result is True)
+
+            # Process results and identify failed groups
+            failed_groups = []
+            success_count = 0
+
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logging.error(f"Exception sending to group {groups[i]}: {result}")
+                    continue
+
+                if result == 200:
+                    success_count += 1
+                elif result == 403:
+                    # Bot was removed from group - mark for removal
+                    failed_groups.append(groups[i])
+                    logging.warning(f"Bot removed from group {groups[i]} - will remove from list")
+
+            # Remove failed groups from the list
+            if failed_groups:
+                updated_groups = [group_id for group_id in groups if group_id not in failed_groups]
+                self.group_manager.save_groups(updated_groups)
+                logging.info(f"Removed {len(failed_groups)} groups due to 403 errors: {failed_groups}")
+
             logging.info(f"Message sent to {success_count}/{len(groups)} groups")
 
         try:
