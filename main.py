@@ -30,7 +30,7 @@ GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
 SLEEP_INTERVAL = 30
 PAGE_LOAD_TIMEOUT = 60000
-WAIT_PAGE_TO_LOAD = 10000
+WAIT_PAGE_TO_LOAD = 60000
 
 # Global state
 _first_time = True
