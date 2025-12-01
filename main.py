@@ -26,7 +26,7 @@ COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
 COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
 GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
-SLEEP_INTERVAL = 60
+SLEEP_INTERVAL = 30
 PAGE_LOAD_TIMEOUT = 60000
 WAIT_PAGE_TO_LOAD = 10000
 
@@ -307,6 +307,31 @@ class TwitterScraper:
             link = await tweet_link.get_attribute("href")
             tweet_id = link.split("/")[-1]
 
+            # Check if the tweet is pinned
+            # Look for pinned tweet indicator on the whole page
+            is_pinned = False
+
+            # Check for various pinned tweet indicators
+            pin_indicators = [
+                "div[data-testid='socialContext']",  # General social context container
+                "svg[aria-label*='Pin']",  # Pin icon
+                "svg[data-testid='pin']",  # Pin test id
+                "*:has-text('Pinned Tweet')",  # Text indicator
+                "*:has-text('Pinned')",  # Shorter pin text
+                "span:has-text('📌')",  # Pin emoji
+            ]
+
+            for indicator in pin_indicators:
+                try:
+                    pin_element = await page.query_selector(indicator)
+                    if pin_element:
+                        pin_text = await pin_element.inner_text()
+                        if any(keyword in pin_text.lower() for keyword in ['pin', 'pinned', '📌']):
+                            is_pinned = True
+                            break
+                except Exception:
+                    continue
+
             # Get tweet text
             text_element = await page.query_selector("div[data-testid='tweetText']")
             text = await text_element.inner_text() if text_element else ""
@@ -314,6 +339,10 @@ class TwitterScraper:
             if not text:
                 logging.info(f"No text found for tweet {tweet_id}")
                 return None
+
+            # Log pin status
+            pin_status = "📌 PINNED" if is_pinned else "🔹 NOT PINNED"
+            logging.info(f"Tweet {tweet_id} for @{username}: {pin_status}")
 
             full_link = f"https://x.com/{username}/status/{tweet_id}"
             return tweet_id, text, full_link
@@ -456,8 +485,9 @@ class TwitterWatcher:
         try:
             while True:
                 # Check for new groups periodically
-                if self.iteration_count % 10 == 0:
-                    self.group_manager.check_new_groups()
+                # TODO: uncomment
+                # if self.iteration_count % 10 == 0:
+                #     self.group_manager.check_new_groups()
 
                 # Run iteration
                 success = await self._run_single_iteration()
