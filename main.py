@@ -76,7 +76,8 @@ BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
 USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 
 STATE_FILE = "tweet_state.json"
-COOKIES_JSON = "twitter_cookies.json"
+COOKIES_JSON_1 = "/cookies/twitter_cookies_1.json"
+COOKIES_JSON_2 = "/cookies/twitter_cookies_2.json"
 GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
 
@@ -213,12 +214,12 @@ def save_state(state):
     json.dump(state, open(STATE_FILE, "w"))
 
 
-async def load_cookies(context):
-    if not os.path.exists(COOKIES_JSON):
+async def load_cookies(context, cookies_address):
+    if not os.path.exists(cookies_address):
         logging.error("❌ Chưa login — hãy chạy login.py trước")
         return False
 
-    cookies = json.load(open(COOKIES_JSON))
+    cookies = json.load(open(cookies_address))
     await context.add_cookies(cookies)
     return True
 
@@ -237,7 +238,6 @@ async def get_latest_tweet(page, username):
         logging.info(f"Page {username} không có status... with {page}", )
     link = await tweet.get_attribute("href")
     tweet_id = link.split("/")[-1]
-    print(f'Found tweet ID: {tweet_id} for user {username}')
 
     text_el = await page.query_selector("div[data-testid='tweetText']")
     text = await text_el.inner_text() if text_el else ""
@@ -272,7 +272,7 @@ async def _main_loop():
                 async with async_playwright() as pw:
                     browser = None
                     try:
-                        browser = await pw.chromium.launch()
+                        browser = await pw.firefox.launch()
                         context = await browser.new_context()
 
                         ok = await load_cookies(context)
@@ -298,13 +298,13 @@ async def _main_loop():
                             if data is None:
                                 continue
 
-                            checksum, text, link = data
+                            tweet_id, text, link = data
 
-                            if state.get(username) != checksum:
+                            if state.get(username) != tweet_id:
                                 if not FIRST_TIME:
                                     logging.info("User %s vừa mới đăng tweet: %s", username, text[:100] + "..." if len(text) > 100 else text)
-                                    send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
-                                state[username] = checksum
+                                    # send_telegram(f"📢 @{username} vừa đăng tweet:\n\n{text}\n\n{link}")
+                                state[username] = tweet_id
                                 state_updated = True
 
                         # Save state only if there were updates

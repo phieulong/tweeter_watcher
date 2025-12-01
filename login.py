@@ -2,7 +2,7 @@ import asyncio
 from playwright.async_api import async_playwright
 import json
 
-COOKIES_JSON = "twitter_cookies.json"
+COOKIES_JSON = "/cookies/twitter_cookies_2.json"
 
 async def main():
     async with async_playwright() as pw:
