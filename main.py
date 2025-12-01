@@ -23,7 +23,7 @@ BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
 USERNAMES = ["elonmusk", "nhat1122319"]
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
-COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
+COOKIES_JSON_2 = "cookies/twitter_cookies_3.json"
 GROUP_FILE = "groups.json"
 OFFSET_FILE = "update_offset.json"
 SLEEP_INTERVAL = 30
@@ -282,8 +282,8 @@ class TwitterScraper:
             logging.error(f"Failed to load cookies from {cookies_file}: {e}")
             return False
 
-    async def get_latest_tweet(self, page: Page, username: str) -> Optional[Tuple[str, str, str]]:
-        """Get the latest tweet for a username"""
+    async def get_latest_tweet(self, page: Page, username: str) -> Optional[Dict[str, Any]]:
+        """Get the latest tweet for a username, returning both pinned and regular tweet info"""
         logging.info("Checking tweets for user: %s", username)
 
         try:
@@ -344,62 +344,80 @@ class TwitterScraper:
                 except Exception:
                     continue
 
-            # Determine which tweet to use
+            result = {
+                'pinned_tweet': None,
+                'latest_tweet': None
+            }
+
+            # Get pinned tweet info if exists
+            if is_pinned:
+                pinned_text = await self._get_tweet_text(page, first_tweet_id, tweet_links)
+                if pinned_text:
+                    result['pinned_tweet'] = {
+                        'id': first_tweet_id,
+                        'text': pinned_text,
+                        'link': f"https://x.com/{username}/status/{first_tweet_id}"
+                    }
+                    logging.info(f"Found pinned tweet {first_tweet_id} for @{username}")
+
+            # Get latest regular tweet
             if is_pinned and len(tweet_links) > 1:
-                # First tweet is pinned, use the second tweet (latest actual tweet)
-                tweet_link = tweet_links[1]
-                link = await tweet_link.get_attribute("href")
-                tweet_id = link.split("/")[-1].split('?')[0]  # Remove query params if any
+                # Use second tweet as latest regular tweet
+                second_tweet_link = tweet_links[1]
+                second_link = await second_tweet_link.get_attribute("href")
+                second_tweet_id = second_link.split("/")[-1].split('?')[0]
 
-                # Log information about both tweets
-                logging.info(f"First tweet {first_tweet_id} for @{username}: 📌 PINNED")
-                logging.info(f"Using next tweet {tweet_id} for @{username}: 🔹 LATEST ACTUAL TWEET")
-            else:
-                # Use the first tweet (either not pinned or only one tweet available)
-                tweet_link = first_tweet_link
-                link = first_link
-                tweet_id = first_tweet_id
+                latest_text = await self._get_tweet_text(page, second_tweet_id, tweet_links)
+                if latest_text:
+                    result['latest_tweet'] = {
+                        'id': second_tweet_id,
+                        'text': latest_text,
+                        'link': f"https://x.com/{username}/status/{second_tweet_id}"
+                    }
+                    logging.info(f"Found latest tweet {second_tweet_id} for @{username}")
+            elif not is_pinned:
+                # First tweet is the latest regular tweet
+                latest_text = await self._get_tweet_text(page, first_tweet_id, tweet_links)
+                if latest_text:
+                    result['latest_tweet'] = {
+                        'id': first_tweet_id,
+                        'text': latest_text,
+                        'link': f"https://x.com/{username}/status/{first_tweet_id}"
+                    }
+                    logging.info(f"Found latest tweet {first_tweet_id} for @{username} (not pinned)")
 
-                pin_status = "📌 PINNED" if is_pinned else "🔹 NOT PINNED"
-                logging.info(f"Tweet {tweet_id} for @{username}: {pin_status}")
-
-            # Get tweet text from the selected tweet
-            # Navigate to the tweet's container to find the text
-            text_element = None
-            try:
-                # Try to find the text element near the selected tweet link
-                tweet_articles = await page.query_selector_all("article[data-testid='tweet']")
-                for article in tweet_articles:
-                    article_link = await article.query_selector("a[href*='/status/']")
-                    if article_link:
-                        article_href = await article_link.get_attribute("href")
-                        if tweet_id in article_href:
-                            text_element = await article.query_selector("div[data-testid='tweetText']")
-                            break
-
-                # Fallback: try to find any tweet text element
-                if not text_element:
-                    text_element = await page.query_selector("div[data-testid='tweetText']")
-
-            except Exception as e:
-                logging.warning(f"Error finding tweet text for {tweet_id}: {e}")
-                text_element = await page.query_selector("div[data-testid='tweetText']")
-
-            text = await text_element.inner_text() if text_element else ""
-
-            if not text:
-                logging.info(f"No text found for tweet {tweet_id}")
-                return None
-
-
-            full_link = f"https://x.com/{username}/status/{tweet_id}"
-            return tweet_id, text, full_link
+            return result if result['pinned_tweet'] or result['latest_tweet'] else None
 
         except Exception as e:
             logging.error(f"Error getting latest tweet for {username}: {e}")
             return None
 
-    async def check_user_tweets(self, page: Page, username: str) -> Tuple[str, Optional[Tuple[str, str, str]]]:
+    async def _get_tweet_text(self, page: Page, tweet_id: str, tweet_links: list) -> Optional[str]:
+        """Helper method to get tweet text for a specific tweet ID"""
+        try:
+            # Try to find the text element near the specific tweet link
+            tweet_articles = await page.query_selector_all("article[data-testid='tweet']")
+            for article in tweet_articles:
+                article_link = await article.query_selector("a[href*='/status/']")
+                if article_link:
+                    article_href = await article_link.get_attribute("href")
+                    if tweet_id in article_href:
+                        text_element = await article.query_selector("div[data-testid='tweetText']")
+                        if text_element:
+                            return await text_element.inner_text()
+
+            # Fallback: try to find any tweet text element
+            text_element = await page.query_selector("div[data-testid='tweetText']")
+            if text_element:
+                return await text_element.inner_text()
+
+            return None
+
+        except Exception as e:
+            logging.warning(f"Error finding tweet text for {tweet_id}: {e}")
+            return None
+
+    async def check_user_tweets(self, page: Page, username: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Check tweets for a single username and return the result"""
         logging.info("Starting tweet check for %s...", username)
 
@@ -408,8 +426,7 @@ class TwitterScraper:
             logging.info("Could not read tweets for: %s", username)
             return username, None
 
-        tweet_id, text, link = data
-        return username, (tweet_id, text, link)
+        return username, data
 
 
 class TwitterWatcher:
@@ -421,7 +438,7 @@ class TwitterWatcher:
         self.group_manager = GroupManager()
         self.health_server = None
         self.iteration_count = 0
-        self.is_first_run = True
+        self.is_first_run = False
 
     def start_health_server(self) -> bool:
         """Start the health check server"""
@@ -440,7 +457,7 @@ class TwitterWatcher:
             logging.info("Using cookies file 2 (iteration %d)", self.iteration_count)
         return cookies_file
 
-    async def _process_user_batch(self, context: BrowserContext, usernames: List[str]) -> List[Tuple[str, Optional[Tuple[str, str, str]]]]:
+    async def _process_user_batch(self, context: BrowserContext, usernames: List[str]) -> List[Tuple[str, Optional[Dict[str, Any]]]]:
         """Process a batch of usernames in parallel"""
         tasks = []
 
@@ -462,7 +479,7 @@ class TwitterWatcher:
 
         return processed_results
 
-    async def _handle_tweet_updates(self, results: List[Tuple[str, Optional[Tuple[str, str, str]]]]) -> None:
+    async def _handle_tweet_updates(self, results: List[Tuple[str, Optional[Dict[str, Any]]]]) -> None:
         """Handle tweet updates and notifications"""
         state = self.scraper.load_state()
         state_updated = False
@@ -471,19 +488,68 @@ class TwitterWatcher:
             if data is None:
                 continue
 
-            tweet_id, text, link = data
+            # Initialize user state if not exists or if it's old format (string)
+            if username not in state or isinstance(state[username], str):
+                state[username] = {
+                    'pinned_tweet_id': None,
+                    'latest_tweet_id': None
+                }
 
-            if state.get(username) != tweet_id:
-                if not self.is_first_run:
-                    truncated_text = text[:100] + "..." if len(text) > 100 else text
-                    logging.info("User %s posted a new tweet: %s", username, truncated_text)
+            user_state = state[username]
+            # Ensure user_state is a dict for type safety
+            if isinstance(user_state, str):
+                # Migrate from old format
+                user_state = {
+                    'pinned_tweet_id': None,
+                    'latest_tweet_id': user_state  # Old tweet_id becomes latest_tweet_id
+                }
+                state[username] = user_state
 
-                    # Send notification
-                    message = f"📢 @{username} just posted:\n\n{text}\n\n{link}"
-                    self.notifier.send_to_all_groups(message)
+            # Check for new pinned tweet
+            if data.get('pinned_tweet'):
+                pinned_tweet = data['pinned_tweet']
+                current_pinned_id = pinned_tweet['id']
 
-                state[username] = tweet_id
-                state_updated = True
+                if user_state.get('pinned_tweet_id') != current_pinned_id:
+                    if not self.is_first_run:
+                        logging.info("User %s has a new pinned tweet: %s", username, pinned_tweet['text'][:100])
+
+                        # Send notification for new pinned tweet
+                        message = f"📌 @{username} just pinned a tweet:\n\n{pinned_tweet['text']}\n\n{pinned_tweet['link']}"
+                        print(message)
+                        # TODO: uncomment
+                        # self.notifier.send_to_all_groups(message)
+
+                    user_state['pinned_tweet_id'] = current_pinned_id
+                    state_updated = True
+            else:
+                # No pinned tweet found, clear pinned state if it existed
+                if user_state.get('pinned_tweet_id') is not None:
+                    if not self.is_first_run:
+                        logging.info("User %s unpinned their tweet", username)
+                    user_state['pinned_tweet_id'] = None
+                    state_updated = True
+
+            # Check for new regular tweet
+            if data.get('latest_tweet'):
+                latest_tweet = data['latest_tweet']
+                current_latest_id = latest_tweet['id']
+
+                if user_state.get('latest_tweet_id') != current_latest_id:
+                    if not self.is_first_run:
+                        logging.info("User %s posted a new tweet: %s", username, latest_tweet['text'][:100])
+
+                        # Send notification for new regular tweet
+                        message = f"📢 @{username} just posted:\n\n{latest_tweet['text']}\n\n{latest_tweet['link']}"
+                        print(message)
+                        # TODO: uncomment
+                        # self.notifier.send_to_all_groups(message)
+
+                    user_state['latest_tweet_id'] = current_latest_id
+                    state_updated = True
+
+            # Update state for this user
+            state[username] = user_state
 
         # Save state only if there were updates
         if state_updated:
