@@ -438,7 +438,7 @@ class TwitterWatcher:
         self.group_manager = GroupManager()
         self.health_server = None
         self.iteration_count = 0
-        self.is_first_run = False
+        self.is_first_run = True
 
     def start_health_server(self) -> bool:
         """Start the health check server"""
@@ -516,9 +516,7 @@ class TwitterWatcher:
 
                         # Send notification for new pinned tweet
                         message = f"📌 @{username} just pinned a tweet:\n\n{pinned_tweet['text']}\n\n{pinned_tweet['link']}"
-                        print(message)
-                        # TODO: uncomment
-                        # self.notifier.send_to_all_groups(message)
+                        self.notifier.send_to_all_groups(message)
 
                     user_state['pinned_tweet_id'] = current_pinned_id
                     state_updated = True
@@ -542,8 +540,7 @@ class TwitterWatcher:
                         # Send notification for new regular tweet
                         message = f"📢 @{username} just posted:\n\n{latest_tweet['text']}\n\n{latest_tweet['link']}"
                         print(message)
-                        # TODO: uncomment
-                        # self.notifier.send_to_all_groups(message)
+                        self.notifier.send_to_all_groups(message)
 
                     user_state['latest_tweet_id'] = current_latest_id
                     state_updated = True
@@ -599,9 +596,8 @@ class TwitterWatcher:
         try:
             while True:
                 # Check for new groups periodically
-                # TODO: uncomment
-                # if self.iteration_count % 10 == 0:
-                #     self.group_manager.check_new_groups()
+                if self.iteration_count % 10 == 0:
+                    self.group_manager.check_new_groups()
 
                 # Run iteration
                 success = await self._run_single_iteration()
