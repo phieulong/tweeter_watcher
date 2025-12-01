@@ -351,14 +351,17 @@ class TwitterScraper:
 
             # Get pinned tweet info if exists
             if is_pinned:
-                pinned_text = await self._get_tweet_text(page, first_tweet_id, tweet_links)
-                if pinned_text:
+                pinned_data = await self._get_tweet_text(page, first_tweet_id, tweet_links)
+                if pinned_data:
                     result['pinned_tweet'] = {
                         'id': first_tweet_id,
-                        'text': pinned_text,
+                        'text': pinned_data['text'],
+                        'type': pinned_data['type'],
+                        'original_text': pinned_data['original_text'],
+                        'repost_context': pinned_data.get('repost_context'),
                         'link': f"https://x.com/{username}/status/{first_tweet_id}"
                     }
-                    logging.info(f"Found pinned tweet {first_tweet_id} for @{username}")
+                    logging.info(f"Found pinned tweet {first_tweet_id} for @{username} (type: {pinned_data['type']})")
 
             # Get latest regular tweet
             if is_pinned and len(tweet_links) > 1:
@@ -367,24 +370,32 @@ class TwitterScraper:
                 second_link = await second_tweet_link.get_attribute("href")
                 second_tweet_id = second_link.split("/")[-1].split('?')[0]
 
-                latest_text = await self._get_tweet_text(page, second_tweet_id, tweet_links)
-                if latest_text:
+                latest_data = await self._get_tweet_text(page, second_tweet_id, tweet_links)
+                if latest_data:
                     result['latest_tweet'] = {
                         'id': second_tweet_id,
-                        'text': latest_text,
+                        'text': latest_data['text'],
+                        'type': latest_data['type'],
+                        'original_text': latest_data['original_text'],
+                        'repost_context': latest_data.get('repost_context'),
                         'link': f"https://x.com/{username}/status/{second_tweet_id}"
                     }
-                    logging.info(f"Found latest tweet {second_tweet_id} for @{username}")
+                    tweet_type_emoji = "🔁" if latest_data['type'] == 'repost' else "✍️"
+                    logging.info(f"Found latest tweet {second_tweet_id} for @{username} ({tweet_type_emoji} {latest_data['type']})")
             elif not is_pinned:
                 # First tweet is the latest regular tweet
-                latest_text = await self._get_tweet_text(page, first_tweet_id, tweet_links)
-                if latest_text:
+                latest_data = await self._get_tweet_text(page, first_tweet_id, tweet_links)
+                if latest_data:
                     result['latest_tweet'] = {
                         'id': first_tweet_id,
-                        'text': latest_text,
+                        'text': latest_data['text'],
+                        'type': latest_data['type'],
+                        'original_text': latest_data['original_text'],
+                        'repost_context': latest_data.get('repost_context'),
                         'link': f"https://x.com/{username}/status/{first_tweet_id}"
                     }
-                    logging.info(f"Found latest tweet {first_tweet_id} for @{username} (not pinned)")
+                    tweet_type_emoji = "🔁" if latest_data['type'] == 'repost' else "✍️"
+                    logging.info(f"Found latest tweet {first_tweet_id} for @{username} ({tweet_type_emoji} {latest_data['type']}, not pinned)")
 
             return result if result['pinned_tweet'] or result['latest_tweet'] else None
 
@@ -392,8 +403,8 @@ class TwitterScraper:
             logging.error(f"Error getting latest tweet for {username}: {e}")
             return None
 
-    async def _get_tweet_text(self, page: Page, tweet_id: str, tweet_links: list) -> Optional[str]:
-        """Helper method to get tweet text for a specific tweet ID"""
+    async def _get_tweet_text(self, page: Page, tweet_id: str, tweet_links: list) -> Optional[Dict[str, str]]:
+        """Helper method to get tweet text and type for a specific tweet ID"""
         try:
             # Try to find the text element near the specific tweet link
             tweet_articles = await page.query_selector_all("article[data-testid='tweet']")
@@ -402,19 +413,77 @@ class TwitterScraper:
                 if article_link:
                     article_href = await article_link.get_attribute("href")
                     if tweet_id in article_href:
-                        text_element = await article.query_selector("div[data-testid='tweetText']")
-                        if text_element:
-                            return await text_element.inner_text()
+                        return await self._analyze_tweet_content(article)
 
-            # Fallback: try to find any tweet text element
-            text_element = await page.query_selector("div[data-testid='tweetText']")
-            if text_element:
-                return await text_element.inner_text()
+            # Fallback: try to find the first tweet article
+            if tweet_articles:
+                return await self._analyze_tweet_content(tweet_articles[0])
 
             return None
 
         except Exception as e:
             logging.warning(f"Error finding tweet text for {tweet_id}: {e}")
+            return None
+
+    async def _analyze_tweet_content(self, article) -> Optional[Dict[str, str]]:
+        """Analyze tweet article to determine if it's original post or repost"""
+        try:
+            # Check for repost indicators
+            repost_indicators = [
+                "div[data-testid='socialContext']",  # Social context (retweeted, etc.)
+                "span:has-text('Retweeted')",
+                "span:has-text('retweeted')",
+                "span:has-text('Reposted')",
+                "span:has-text('reposted')",
+                "*:has-text('🔁')",  # Retweet icon
+                "svg[data-testid='retweet']",
+                "span[data-testid='socialContext']",
+            ]
+
+            is_repost = False
+            repost_context = ""
+
+            # Check for repost indicators
+            for indicator in repost_indicators:
+                try:
+                    repost_element = await article.query_selector(indicator)
+                    if repost_element:
+                        context_text = await repost_element.inner_text()
+                        if any(keyword in context_text.lower() for keyword in ['retweeted', 'reposted', 'retweet', 'repost', '🔁']):
+                            is_repost = True
+                            repost_context = context_text.strip()
+                            break
+                except Exception:
+                    continue
+
+            # Get the main tweet text
+            text_element = await article.query_selector("div[data-testid='tweetText']")
+            tweet_text = await text_element.inner_text() if text_element else ""
+
+            if not tweet_text:
+                return None
+
+            # Determine tweet type and format response
+            if is_repost:
+                tweet_type = "repost"
+                # Try to extract original author from repost context
+                if repost_context:
+                    full_text = f"[REPOST] {repost_context}\n\n{tweet_text}"
+                else:
+                    full_text = f"[REPOST]\n\n{tweet_text}"
+            else:
+                tweet_type = "original"
+                full_text = tweet_text
+
+            return {
+                'text': full_text,
+                'type': tweet_type,
+                'original_text': tweet_text,
+                'repost_context': repost_context if is_repost else None
+            }
+
+        except Exception as e:
+            logging.warning(f"Error analyzing tweet content: {e}")
             return None
 
     async def check_user_tweets(self, page: Page, username: str) -> Tuple[str, Optional[Dict[str, Any]]]:
@@ -512,10 +581,16 @@ class TwitterWatcher:
 
                 if user_state.get('pinned_tweet_id') != current_pinned_id:
                     if not self.is_first_run:
-                        logging.info("User %s has a new pinned tweet: %s", username, pinned_tweet['text'][:100])
+                        tweet_type = pinned_tweet.get('type', 'original')
+                        type_emoji = "🔁" if tweet_type == 'repost' else "✍️"
+                        logging.info("User %s has a new pinned tweet (%s): %s", username, tweet_type, pinned_tweet['text'][:100])
 
                         # Send notification for new pinned tweet
-                        message = f"📌 @{username} just pinned a tweet:\n\n{pinned_tweet['text']}\n\n{pinned_tweet['link']}"
+                        if tweet_type == 'repost':
+                            message = f"📌 @{username} just pinned a repost:\n\n{pinned_tweet['text']}\n\n{pinned_tweet['link']}"
+                        else:
+                            message = f"📌 @{username} just pinned their tweet:\n\n{pinned_tweet['text']}\n\n{pinned_tweet['link']}"
+                        print(message)
                         self.notifier.send_to_all_groups(message)
 
                     user_state['pinned_tweet_id'] = current_pinned_id
@@ -535,10 +610,15 @@ class TwitterWatcher:
 
                 if user_state.get('latest_tweet_id') != current_latest_id:
                     if not self.is_first_run:
-                        logging.info("User %s posted a new tweet: %s", username, latest_tweet['text'][:100])
+                        tweet_type = latest_tweet.get('type', 'original')
+                        type_emoji = "🔁" if tweet_type == 'repost' else "✍️"
+                        logging.info("User %s posted a new %s: %s", username, tweet_type, latest_tweet['text'][:100])
 
                         # Send notification for new regular tweet
-                        message = f"📢 @{username} just posted:\n\n{latest_tweet['text']}\n\n{latest_tweet['link']}"
+                        if tweet_type == 'repost':
+                            message = f"🔁 @{username} just reposted:\n\n{latest_tweet['text']}\n\n{latest_tweet['link']}"
+                        else:
+                            message = f"✍️ @{username} just posted:\n\n{latest_tweet['text']}\n\n{latest_tweet['link']}"
                         print(message)
                         self.notifier.send_to_all_groups(message)
 
