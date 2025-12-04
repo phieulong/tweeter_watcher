@@ -522,7 +522,7 @@ class TwitterScraper:
 
     async def check_user_tweets(self, page: Page, username: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Check tweets for a single username and return the result"""
-        # logging.info("Starting tweet check for %s...", username)
+        logging.info("Starting tweet check for %s...", username)
         data = await self.get_latest_tweet(page, username)
         if not data:
             logging.info("Could not read tweets for: %s", username)
