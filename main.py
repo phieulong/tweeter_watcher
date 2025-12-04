@@ -21,7 +21,8 @@ logging.basicConfig(
 # Constants
 BOT_TOKEN = "8142781290:AAFM6d0H4Cv4f1YIZkvbQAOON1shB0L0QHg"
 # USERNAMES = ["elonmusk", "nhat1122319"]
-USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+# USERNAMES = ["elonmusk", "tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
+USERNAMES = ["tommyzz8", "nhat1122319", "BarrySilbert", "metaproph3t", "biancoresearch", "EricBalchunas"]
 STATE_FILE = "tweet_state.json"
 COOKIES_JSON_1 = "cookies/twitter_cookies_1.json"
 COOKIES_JSON_2 = "cookies/twitter_cookies_2.json"
@@ -317,7 +318,7 @@ class TwitterScraper:
 
     async def get_latest_tweet(self, page: Page, username: str) -> Optional[Dict[str, Any]]:
         """Get the latest tweet for a username, returning both pinned and regular tweet info"""
-        logging.info("Checking tweets for user: %s", username)
+        # logging.info("Checking tweets for user: %s", username)
 
         try:
             url = f"https://x.com/{username}"
@@ -521,8 +522,7 @@ class TwitterScraper:
 
     async def check_user_tweets(self, page: Page, username: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Check tweets for a single username and return the result"""
-        logging.info("Starting tweet check for %s...", username)
-
+        # logging.info("Starting tweet check for %s...", username)
         data = await self.get_latest_tweet(page, username)
         if not data:
             logging.info("Could not read tweets for: %s", username)
